@@ -435,7 +435,7 @@ function openPdf(pdfData) {
     }
   } catch(e) { alert("Erro ao abrir PDF: " + e.message); }
 }
- (PT, EN, fórmula simples) para float
+// Converte número em qualquer formato (PT, EN, fórmula simples) para float
 function parseNumPT(val) {
   if (val === null || val === undefined || val === "") return 0;
   if (typeof val === "number") return val;
