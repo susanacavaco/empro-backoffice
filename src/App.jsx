@@ -420,7 +420,22 @@ function EcrãPromoções() {
 ══════════════════════════════════ */
 const FAMILIAS = ["Cerveja", "Refrigerantes", "Vinho", "Espumante", "Água", "Energéticas", "Destilados", "Outros"];
 
-// Converte número em qualquer formato (PT, EN, fórmula simples) para float
+// Abre PDF Base64 ou URL numa nova janela via Blob
+function openPdf(pdfData) {
+  if (!pdfData) return;
+  try {
+    if (pdfData.startsWith("data:")) {
+      const base64 = pdfData.split(",")[1];
+      const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+      const blob = new Blob([bytes], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+    } else {
+      window.open(pdfData, "_blank");
+    }
+  } catch(e) { alert("Erro ao abrir PDF: " + e.message); }
+}
+ (PT, EN, fórmula simples) para float
 function parseNumPT(val) {
   if (val === null || val === undefined || val === "") return 0;
   if (typeof val === "number") return val;
@@ -584,6 +599,10 @@ function ModalProduto({ produto, onClose, onSave }) {
   const [fotoFile, setFotoFile] = useState(null);
   const [pdfFile, setPdfFile] = useState(null);
   const [fotoPreview, setFotoPreview] = useState(produto?.foto || null);
+  const [fotoMode, setFotoMode] = useState("ficheiro"); // "ficheiro" | "url"
+  const [pdfMode, setPdfMode] = useState("ficheiro");   // "ficheiro" | "url"
+  const [fotoUrl, setFotoUrlInput] = useState("");
+  const [pdfUrlInput, setPdfUrlInput] = useState("");
   const [saving, setSaving] = useState(false);
   const [uploadProgress, setUploadProgress] = useState("");
 
@@ -614,33 +633,88 @@ function ModalProduto({ produto, onClose, onSave }) {
     img.src = url;
   };
 
-  const handleSave = async () => {
+  // Fetch imagem por URL → Base64
+  const handleFotoUrl = async (url) => {
+    setFotoUrlInput(url);
+    if (!url) return;
+    try {
+      setUploadProgress("A carregar imagem...");
+      const resp = await fetch(url);
+      const blob = await resp.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const img = new window.Image();
+      img.onload = () => {
+        const MAX = 600;
+        let w = img.width, h = img.height;
+        if (w > MAX || h > MAX) {
+          if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
+          else { w = Math.round(w * MAX / h); h = MAX; }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = w; canvas.height = h;
+        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+        const b64 = canvas.toDataURL("image/jpeg", 0.75);
+        setFotoPreview(b64);
+        setFotoFile({ _b64: b64 });
+        URL.revokeObjectURL(objectUrl);
+        setUploadProgress("Imagem carregada ✓");
+      };
+      img.onerror = () => {
+        // CORS bloqueou — guardar URL diretamente
+        setFotoPreview(url);
+        setFotoFile({ _url: url });
+        setUploadProgress("URL guardado ✓");
+      };
+      img.src = objectUrl;
+    } catch {
+      // Guardar URL diretamente
+      setFotoPreview(url);
+      setFotoFile({ _url: url });
+      setUploadProgress("URL guardado ✓");
+    }
+  };
+
+  // Fetch PDF por URL → Base64
+  const handlePdfUrl = async (url) => {
+    setPdfUrlInput(url);
+    if (!url) return;
+    try {
+      setUploadProgress("A carregar PDF...");
+      const resp = await fetch(url);
+      const buf = await resp.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      let binary = "";
+      bytes.forEach(b => binary += String.fromCharCode(b));
+      const b64 = "data:application/pdf;base64," + btoa(binary);
+      setPdfFile({ _b64: b64 });
+      setUploadProgress("PDF carregado ✓");
+    } catch {
+      // CORS bloqueou — guardar URL diretamente
+      setPdfFile({ _url: url });
+      setUploadProgress("URL PDF guardado ✓");
+    }
+  };
+
+
     if (!form.nome || !form.ref || !form.preco) return alert("Preencha Nome, Referência e Preço.");
     setSaving(true);
     let fotoUrl = form.foto || "";
     let pdfUrl = form.pdf || "";
 
-    // Foto — Base64 comprimido, guardado direto no Firestore (sem Storage/CORS)
+    // Foto — Base64 ou URL direto
     if (fotoFile?._b64) {
       fotoUrl = fotoFile._b64;
       setUploadProgress("Foto pronta ✓");
+    } else if (fotoFile?._url) {
+      fotoUrl = fotoFile._url;
     }
 
-    // Upload PDF — Base64 no Firestore (igual à foto)
-    if (pdfFile) {
-      try {
-        setUploadProgress("A processar PDF...");
-        const buf = await pdfFile.arrayBuffer();
-        const bytes = new Uint8Array(buf);
-        let binary = "";
-        bytes.forEach(b => binary += String.fromCharCode(b));
-        pdfUrl = "data:application/pdf;base64," + btoa(binary);
-        setUploadProgress("PDF pronto ✓");
-      } catch (e) {
-        console.warn("PDF erro:", e.message);
-        setUploadProgress("⚠️ Erro ao processar PDF");
-        await new Promise(r => setTimeout(r, 1000));
-      }
+    // PDF — Base64 ou URL direto
+    if (pdfFile?._b64) {
+      pdfUrl = pdfFile._b64;
+      setUploadProgress("PDF pronto ✓");
+    } else if (pdfFile?._url) {
+      pdfUrl = pdfFile._url;
     }
 
     // Guardar dados no Firestore (sempre acontece)
@@ -690,41 +764,81 @@ function ModalProduto({ produto, onClose, onSave }) {
 
         {/* Foto */}
         <div style={{ marginBottom: 18 }}>
-          <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8, fontFamily: "monospace" }}>Foto do Produto</label>
-          <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
-            <div style={{ width: 90, height: 90, borderRadius: 12, border: `2px dashed ${T.border}`, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", background: T.bg, flexShrink: 0 }}>
-              {fotoPreview
-                ? <img src={fotoPreview} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                : <Package size={28} color={T.mutedL} />}
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+            <label style={{ fontSize:11, fontWeight:700, color:T.muted, textTransform:"uppercase", letterSpacing:1, fontFamily:"monospace" }}>Foto do Produto</label>
+            <div style={{ display:"flex", gap:4 }}>
+              {["ficheiro","url"].map(m => (
+                <button key={m} onClick={() => setFotoMode(m)} style={{ fontSize:11, padding:"3px 10px", borderRadius:6, border:`1px solid ${fotoMode===m ? T.navy : T.border}`, background: fotoMode===m ? T.navy : "white", color: fotoMode===m ? "white" : T.muted, cursor:"pointer", fontWeight:600 }}>
+                  {m === "ficheiro" ? "📁 Ficheiro" : "🔗 URL"}
+                </button>
+              ))}
             </div>
-            <div>
-              <label style={{ display: "inline-flex", alignItems: "center", gap: 7, background: T.navy, color: "white", padding: "9px 16px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: S.font }}>
-                <Download size={13} /> Escolher Foto
-                <input type="file" accept="image/*" onChange={handleFoto} style={{ display: "none" }} />
-              </label>
-              <div style={{ fontSize: 11, color: T.muted, marginTop: 6 }}>JPG, PNG ou WebP · Máx. 5MB</div>
-              {uploadProgress && <div style={{ fontSize: 11, color: T.green, marginTop: 4, fontWeight: 600 }}>{uploadProgress}</div>}
+          </div>
+          <div style={{ display:"flex", gap:14, alignItems:"center" }}>
+            <div style={{ width:90, height:90, borderRadius:12, border:`2px dashed ${T.border}`, display:"flex", alignItems:"center", justifyContent:"center", overflow:"hidden", background:T.bg, flexShrink:0 }}>
+              {fotoPreview ? <img src={fotoPreview} alt="" style={{ width:"100%", height:"100%", objectFit:"contain" }} /> : <Package size={28} color={T.mutedL} />}
+            </div>
+            <div style={{ flex:1 }}>
+              {fotoMode === "ficheiro" ? (
+                <label style={{ display:"inline-flex", alignItems:"center", gap:7, background:T.navy, color:"white", padding:"9px 16px", borderRadius:8, cursor:"pointer", fontSize:13, fontWeight:600 }}>
+                  <Download size={13} /> Escolher Foto
+                  <input type="file" accept="image/*" onChange={handleFoto} style={{ display:"none" }} />
+                </label>
+              ) : (
+                <input
+                  placeholder="https://exemplo.com/foto.jpg"
+                  value={fotoUrl}
+                  onChange={e => handleFotoUrl(e.target.value)}
+                  onBlur={e => handleFotoUrl(e.target.value)}
+                  style={{ width:"100%", padding:"9px 12px", borderRadius:8, border:`1px solid ${T.border}`, fontSize:13, fontFamily:S.font, boxSizing:"border-box" }}
+                />
+              )}
+              <div style={{ fontSize:11, color:T.muted, marginTop:6 }}>
+                {fotoMode === "ficheiro" ? "JPG, PNG ou WebP · Máx. 5MB" : "Cole o URL direto da imagem"}
+              </div>
+              {uploadProgress && <div style={{ fontSize:11, color:T.green, marginTop:4, fontWeight:600 }}>{uploadProgress}</div>}
             </div>
           </div>
         </div>
 
         {/* PDF */}
         <div style={{ marginBottom: 18 }}>
-          <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8, fontFamily: "monospace" }}>Ficha Técnica (PDF)</label>
-          <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
-            <div style={{ width: 90, height: 90, borderRadius: 12, border: `2px dashed ${T.border}`, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: T.bg, flexShrink: 0, gap: 4 }}>
-              <FileText size={24} color={pdfFile || form.pdf ? T.red : T.mutedL} />
-              <span style={{ fontSize: 9, color: T.muted, fontFamily: "monospace" }}>PDF</span>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+            <label style={{ fontSize:11, fontWeight:700, color:T.muted, textTransform:"uppercase", letterSpacing:1, fontFamily:"monospace" }}>Ficha Técnica (PDF)</label>
+            <div style={{ display:"flex", gap:4 }}>
+              {["ficheiro","url"].map(m => (
+                <button key={m} onClick={() => setPdfMode(m)} style={{ fontSize:11, padding:"3px 10px", borderRadius:6, border:`1px solid ${pdfMode===m ? T.navy : T.border}`, background: pdfMode===m ? T.navy : "white", color: pdfMode===m ? "white" : T.muted, cursor:"pointer", fontWeight:600 }}>
+                  {m === "ficheiro" ? "📁 Ficheiro" : "🔗 URL"}
+                </button>
+              ))}
             </div>
-            <div>
-              <label style={{ display: "inline-flex", alignItems: "center", gap: 7, background: T.navy, color: "white", padding: "9px 16px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: S.font }}>
-                <Upload size={13} /> {pdfFile ? pdfFile.name : "Escolher PDF"}
-                <input type="file" accept=".pdf" onChange={e => setPdfFile(e.target.files[0])} style={{ display: "none" }} />
-              </label>
-              {form.pdf && !pdfFile && (
-                <a href={form.pdf} target="_blank" rel="noreferrer" style={{ display: "block", fontSize: 11, color: T.blue, marginTop: 6, textDecoration: "underline" }}>Ver PDF atual</a>
+          </div>
+          <div style={{ display:"flex", gap:14, alignItems:"center" }}>
+            <div style={{ width:90, height:90, borderRadius:12, border:`2px dashed ${T.border}`, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", background:T.bg, flexShrink:0, gap:4 }}>
+              <FileText size={24} color={pdfFile || form.pdf ? T.red : T.mutedL} />
+              <span style={{ fontSize:9, color:T.muted, fontFamily:"monospace" }}>PDF</span>
+            </div>
+            <div style={{ flex:1 }}>
+              {pdfMode === "ficheiro" ? (
+                <label style={{ display:"inline-flex", alignItems:"center", gap:7, background:T.navy, color:"white", padding:"9px 16px", borderRadius:8, cursor:"pointer", fontSize:13, fontWeight:600 }}>
+                  <Upload size={13} /> {pdfFile ? "PDF carregado ✓" : "Escolher PDF"}
+                  <input type="file" accept=".pdf" onChange={e => { const f = e.target.files[0]; if (!f) return; setPdfFile(null); f.arrayBuffer().then(buf => { const bytes = new Uint8Array(buf); let bin=""; bytes.forEach(b=>bin+=String.fromCharCode(b)); setPdfFile({ _b64: "data:application/pdf;base64,"+btoa(bin) }); }); }} style={{ display:"none" }} />
+                </label>
+              ) : (
+                <input
+                  placeholder="https://exemplo.com/ficha.pdf"
+                  value={pdfUrlInput}
+                  onChange={e => setPdfUrlInput(e.target.value)}
+                  onBlur={e => handlePdfUrl(e.target.value)}
+                  style={{ width:"100%", padding:"9px 12px", borderRadius:8, border:`1px solid ${T.border}`, fontSize:13, fontFamily:S.font, boxSizing:"border-box" }}
+                />
               )}
-              <div style={{ fontSize: 11, color: T.muted, marginTop: 6 }}>Ficha técnica visível na loja e app · Máx. 10MB</div>
+              {form.pdf && !pdfFile && (
+                <button onClick={() => openPdf(form.pdf)} style={{ display:"block", fontSize:11, color:T.blue, marginTop:6, background:"none", border:"none", cursor:"pointer", textDecoration:"underline", padding:0 }}>Ver PDF atual</button>
+              )}
+              <div style={{ fontSize:11, color:T.muted, marginTop:6 }}>
+                {pdfMode === "ficheiro" ? "Ficha técnica visível na loja e app" : "Cole o URL direto do PDF"}
+              </div>
             </div>
           </div>
         </div>
@@ -828,10 +942,10 @@ function EcrãProdutos() {
                   {p.ativo ? "ATIVO" : "INATIVO"}
                 </span>
                 {p.pdf && (
-                  <a href={p.pdf} target="_blank" rel="noreferrer"
-                    style={{ position:"absolute", bottom:10, left:10, display:"flex", alignItems:"center", gap:5, background:"white", border:`1px solid ${T.red}`, borderRadius:8, padding:"4px 9px", color:T.red, fontSize:11, fontWeight:700, textDecoration:"none", boxShadow:"0 1px 4px #0002" }}>
-                    <FileText size={12} /> Ficha PDF
-                  </a>
+                  <button onClick={() => openPdf(p.pdf)}
+                    style={{ position:"absolute", bottom:10, left:10, display:"flex", alignItems:"center", gap:5, background:"white", border:`1px solid ${T.red}`, borderRadius:8, padding:"4px 9px", color:T.red, fontSize:11, fontWeight:700, cursor:"pointer", boxShadow:"0 1px 4px #0002" }}>
+                    <FileText size={12} /> Ficha Técnica
+                  </button>
                 )}
               </div>
               {/* Info */}
