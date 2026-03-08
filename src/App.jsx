@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { initializeApp } from "firebase/app";
 import { getFirestore, collection, onSnapshot, doc, updateDoc, addDoc, deleteDoc, query, orderBy, serverTimestamp } from "firebase/firestore";
-import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
+import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage"; // mantido para PDFs futuros
 
 /* ── Firebase ── */
 const firebaseConfig = {
@@ -567,7 +567,25 @@ function ModalProduto({ produto, onClose, onSave }) {
     const file = e.target.files[0];
     if (!file) return;
     setFotoFile(file);
-    setFotoPreview(URL.createObjectURL(file));
+    // Comprimir e converter para Base64 via canvas
+    const img = new window.Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const MAX = 600; // px máximo
+      let w = img.width, h = img.height;
+      if (w > MAX || h > MAX) {
+        if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
+        else { w = Math.round(w * MAX / h); h = MAX; }
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+      const b64 = canvas.toDataURL("image/jpeg", 0.75);
+      setFotoPreview(b64);
+      setFotoFile({ _b64: b64 }); // guardar base64 em vez do File
+      URL.revokeObjectURL(url);
+    };
+    img.src = url;
   };
 
   const handleSave = async () => {
@@ -576,19 +594,10 @@ function ModalProduto({ produto, onClose, onSave }) {
     let fotoUrl = form.foto || "";
     let pdfUrl = form.pdf || "";
 
-    // Upload foto — se falhar, continua sem foto
-    if (fotoFile) {
-      try {
-        setUploadProgress("A carregar foto...");
-        const fileRef = storageRef(storage, `produtos/${Date.now()}_${fotoFile.name}`);
-        await uploadBytes(fileRef, fotoFile);
-        fotoUrl = await getDownloadURL(fileRef);
-        setUploadProgress("Foto carregada ✓");
-      } catch (e) {
-        console.warn("Foto não carregada:", e.message);
-        setUploadProgress("⚠️ Foto não carregada — verifique regras do Storage");
-        await new Promise(r => setTimeout(r, 1500));
-      }
+    // Foto — Base64 comprimido, guardado direto no Firestore (sem Storage/CORS)
+    if (fotoFile?._b64) {
+      fotoUrl = fotoFile._b64;
+      setUploadProgress("Foto pronta ✓");
     }
 
     // Upload PDF — se falhar, continua sem PDF
@@ -601,7 +610,7 @@ function ModalProduto({ produto, onClose, onSave }) {
         setUploadProgress("PDF carregado ✓");
       } catch (e) {
         console.warn("PDF não carregado:", e.message);
-        setUploadProgress("⚠️ PDF não carregado — verifique regras do Storage");
+        setUploadProgress("⚠️ PDF não carregado — Configure CORS no Storage");
         await new Promise(r => setTimeout(r, 1500));
       }
     }
