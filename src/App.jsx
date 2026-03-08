@@ -626,10 +626,21 @@ function ModalProduto({ produto, onClose, onSave }) {
       setUploadProgress("Foto pronta ✓");
     }
 
-    // Upload PDF — Storage não configurado ainda, ignorar
+    // Upload PDF — Base64 no Firestore (igual à foto)
     if (pdfFile) {
-      setUploadProgress("⚠️ PDF não suportado ainda — em breve!");
-      await new Promise(r => setTimeout(r, 1000));
+      try {
+        setUploadProgress("A processar PDF...");
+        const buf = await pdfFile.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        let binary = "";
+        bytes.forEach(b => binary += String.fromCharCode(b));
+        pdfUrl = "data:application/pdf;base64," + btoa(binary);
+        setUploadProgress("PDF pronto ✓");
+      } catch (e) {
+        console.warn("PDF erro:", e.message);
+        setUploadProgress("⚠️ Erro ao processar PDF");
+        await new Promise(r => setTimeout(r, 1000));
+      }
     }
 
     // Guardar dados no Firestore (sempre acontece)
@@ -808,14 +819,20 @@ function EcrãProdutos() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 16 }}>
           {filtered.map(p => (
             <div key={p.firestoreId} style={{ background: T.white, borderRadius: 14, border: `1px solid ${T.border}`, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-              {/* Foto */}
-              <div style={{ height: 160, background: T.bg, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", position: "relative" }}>
+              {/* Foto quadrada */}
+              <div style={{ position:"relative", width:"100%", paddingBottom:"100%", background: T.bg, overflow:"hidden" }}>
                 {p.foto
-                  ? <img src={p.foto} alt={p.nome} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                  : <Package size={48} color={T.mutedL} />}
-                <span style={{ position: "absolute", top: 10, right: 10, background: p.ativo ? T.green : T.muted, color: "white", fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 20, fontFamily: "monospace" }}>
+                  ? <img src={p.foto} alt={p.nome} style={{ position:"absolute", inset:0, width:"100%", height:"100%", objectFit:"contain", padding:"12px" }} />
+                  : <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center" }}><Package size={48} color={T.mutedL} /></div>}
+                <span style={{ position:"absolute", top:10, right:10, background: p.ativo ? T.green : T.muted, color:"white", fontSize:10, fontWeight:700, padding:"3px 8px", borderRadius:20, fontFamily:"monospace" }}>
                   {p.ativo ? "ATIVO" : "INATIVO"}
                 </span>
+                {p.pdf && (
+                  <a href={p.pdf} target="_blank" rel="noreferrer"
+                    style={{ position:"absolute", bottom:10, left:10, display:"flex", alignItems:"center", gap:5, background:"white", border:`1px solid ${T.red}`, borderRadius:8, padding:"4px 9px", color:T.red, fontSize:11, fontWeight:700, textDecoration:"none", boxShadow:"0 1px 4px #0002" }}>
+                    <FileText size={12} /> Ficha PDF
+                  </a>
+                )}
               </div>
               {/* Info */}
               <div style={{ padding: 14, flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
@@ -836,11 +853,6 @@ function EcrãProdutos() {
                 </div>
                 <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
                   <Btn variant="secondary" size="sm" icon={Edit2} full onClick={() => setModal(p)}>Editar</Btn>
-                  {p.pdf && (
-                    <a href={p.pdf} target="_blank" rel="noreferrer" style={{ display: "flex", alignItems: "center", border: `1px solid ${T.border}`, borderRadius: 8, padding: "7px 10px", color: T.red, textDecoration: "none" }} title="Ver ficha técnica PDF">
-                      <FileText size={13} />
-                    </a>
-                  )}
                   <button onClick={() => apagar(p)} style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 8, padding: "7px 10px", cursor: "pointer", color: T.red, display: "flex", alignItems: "center" }}><Trash2 size={13} /></button>
                 </div>
               </div>
