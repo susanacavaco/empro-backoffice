@@ -420,16 +420,21 @@ function EcrãPromoções() {
 ══════════════════════════════════ */
 const FAMILIAS = ["Cerveja", "Refrigerantes", "Vinho", "Espumante", "Água", "Energéticas", "Destilados", "Outros"];
 
-// Converte número em formato PT (1.234,56 ou 1234,56 ou 1234.56) para float
+// Converte número em qualquer formato (PT, EN, fórmula simples) para float
 function parseNumPT(val) {
   if (val === null || val === undefined || val === "") return 0;
   if (typeof val === "number") return val;
-  const s = String(val).trim();
-  // Formato PT: 1.234,56 → remover pontos, trocar vírgula por ponto
+  let s = String(val).trim();
+  // Se é fórmula Excel simples tipo =3.10*6 ou =E7*F7 — tentar avaliar se só tem números e operadores
+  if (s.startsWith("=")) {
+    const expr = s.slice(1).replace(/[A-Z]+\d+/g, "0"); // substitui refs por 0
+    try { const r = Function('"use strict"; return (' + expr + ')')(); if (typeof r === "number" && isFinite(r)) return r; } catch {}
+    return 0;
+  }
+  // Formato PT: 1.234,56 → remover pontos de milhar, trocar vírgula por ponto
   if (s.includes(",") && s.includes(".")) return parseFloat(s.replace(/\./g, "").replace(",", ".")) || 0;
   // Só vírgula: 17,28 → 17.28
   if (s.includes(",")) return parseFloat(s.replace(",", ".")) || 0;
-  // Só ponto ou já EN: 17.28
   return parseFloat(s) || 0;
 }
 
@@ -450,16 +455,20 @@ function ModalImportExcel({ onClose, onImport }) {
     try {
       const XLSX = await import("https://cdn.sheetjs.com/xlsx-0.20.0/package/xlsx.mjs");
       const buf = await file.arrayBuffer();
-      const wb = XLSX.read(buf, { type: "array" });
+      const wb = XLSX.read(buf, { type: "array", cellFormula: false, cellNF: false });
       const ws = wb.Sheets[wb.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
+      const rows = XLSX.utils.sheet_to_json(ws, { defval: "", raw: true });
       // Mapear colunas flexivelmente
       const mapped = rows.map((r, i) => {
         const keys = Object.keys(r).map(k => k.toLowerCase().trim());
         const get = (...names) => {
           for (const n of names) {
-            const k = Object.keys(r).find(k => k.toLowerCase().trim().includes(n));
-            if (k && r[k] !== "") return r[k];
+            // limpa cabeçalho: remove acentos, parênteses, (€), espaços extra
+            const k = Object.keys(r).find(k => {
+              const clean = k.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s*\(.*?\)\s*/g, "").trim();
+              return clean.includes(n);
+            });
+            if (k && r[k] !== "" && r[k] !== null && r[k] !== undefined) return r[k];
           }
           return "";
         };
