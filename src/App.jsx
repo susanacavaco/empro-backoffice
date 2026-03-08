@@ -573,22 +573,42 @@ function ModalProduto({ produto, onClose, onSave }) {
   const handleSave = async () => {
     if (!form.nome || !form.ref || !form.preco) return alert("Preencha Nome, Referência e Preço.");
     setSaving(true);
-    try {
-      let fotoUrl = form.foto || "";
-      let pdfUrl = form.pdf || "";
-      if (fotoFile) {
+    let fotoUrl = form.foto || "";
+    let pdfUrl = form.pdf || "";
+
+    // Upload foto — se falhar, continua sem foto
+    if (fotoFile) {
+      try {
         setUploadProgress("A carregar foto...");
         const fileRef = storageRef(storage, `produtos/${Date.now()}_${fotoFile.name}`);
         await uploadBytes(fileRef, fotoFile);
         fotoUrl = await getDownloadURL(fileRef);
+        setUploadProgress("Foto carregada ✓");
+      } catch (e) {
+        console.warn("Foto não carregada:", e.message);
+        setUploadProgress("⚠️ Foto não carregada — verifique regras do Storage");
+        await new Promise(r => setTimeout(r, 1500));
       }
-      if (pdfFile) {
+    }
+
+    // Upload PDF — se falhar, continua sem PDF
+    if (pdfFile) {
+      try {
         setUploadProgress("A carregar PDF...");
         const pdfRef = storageRef(storage, `fichas/${Date.now()}_${pdfFile.name}`);
         await uploadBytes(pdfRef, pdfFile);
         pdfUrl = await getDownloadURL(pdfRef);
+        setUploadProgress("PDF carregado ✓");
+      } catch (e) {
+        console.warn("PDF não carregado:", e.message);
+        setUploadProgress("⚠️ PDF não carregado — verifique regras do Storage");
+        await new Promise(r => setTimeout(r, 1500));
       }
-      if (fotoFile || pdfFile) setUploadProgress("Ficheiros carregados!");
+    }
+
+    // Guardar dados no Firestore (sempre acontece)
+    try {
+      setUploadProgress("A guardar produto...");
       const dados = {
         nome: form.nome, ref: form.ref, familia: form.familia,
         preco: parseFloat(form.preco) || 0,
@@ -605,10 +625,10 @@ function ModalProduto({ produto, onClose, onSave }) {
       } else {
         await addDoc(collection(db, "produtos"), { ...dados, criadoEm: serverTimestamp() });
       }
-      onSave();
+      onSave(); // fecha o modal
     } catch (e) {
       console.error(e);
-      alert("Erro ao guardar: " + e.message);
+      alert("Erro ao guardar no Firestore: " + e.message);
     } finally {
       setSaving(false);
       setUploadProgress("");
