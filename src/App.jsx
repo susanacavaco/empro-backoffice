@@ -695,26 +695,26 @@ function ModalProduto({ produto, onClose, onSave }) {
     }
   };
 
-
+  const handleSave = async () => {
     if (!form.nome || !form.ref || !form.preco) return alert("Preencha Nome, Referência e Preço.");
     setSaving(true);
-    let fotoUrl = form.foto || "";
-    let pdfUrl = form.pdf || "";
+    let fotoFinal = form.foto || "";
+    let pdfFinal = form.pdf || "";
 
     // Foto — Base64 ou URL direto
     if (fotoFile?._b64) {
-      fotoUrl = fotoFile._b64;
+      fotoFinal = fotoFile._b64;
       setUploadProgress("Foto pronta ✓");
     } else if (fotoFile?._url) {
-      fotoUrl = fotoFile._url;
+      fotoFinal = fotoFile._url;
     }
 
     // PDF — Base64 ou URL direto
     if (pdfFile?._b64) {
-      pdfUrl = pdfFile._b64;
+      pdfFinal = pdfFile._b64;
       setUploadProgress("PDF pronto ✓");
     } else if (pdfFile?._url) {
-      pdfUrl = pdfFile._url;
+      pdfFinal = pdfFile._url;
     }
 
     // Guardar dados no Firestore (sempre acontece)
@@ -727,8 +727,8 @@ function ModalProduto({ produto, onClose, onSave }) {
         unidade: form.unidade || "cx",
         stock: parseInt(form.stock) || 0,
         ativo: form.ativo, descricao: form.descricao || "",
-        foto: fotoUrl,
-        pdf: pdfUrl,
+        foto: fotoFinal,
+        pdf: pdfFinal,
         updatedAt: serverTimestamp(),
       };
       if (produto?.firestoreId) {
