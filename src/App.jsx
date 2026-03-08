@@ -9,7 +9,6 @@ import {
 } from "lucide-react";
 import { initializeApp } from "firebase/app";
 import { getFirestore, collection, onSnapshot, doc, updateDoc, addDoc, deleteDoc, query, orderBy, serverTimestamp } from "firebase/firestore";
-import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage"; // mantido para PDFs futuros
 
 /* ── Firebase ── */
 const firebaseConfig = {
@@ -22,7 +21,6 @@ const firebaseConfig = {
 };
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
-const storage = getStorage(firebaseApp);
 
 /* ── Fonts ── */
 const fontLink = document.createElement("link");
@@ -600,19 +598,10 @@ function ModalProduto({ produto, onClose, onSave }) {
       setUploadProgress("Foto pronta ✓");
     }
 
-    // Upload PDF — se falhar, continua sem PDF
+    // Upload PDF — Storage não configurado ainda, ignorar
     if (pdfFile) {
-      try {
-        setUploadProgress("A carregar PDF...");
-        const pdfRef = storageRef(storage, `fichas/${Date.now()}_${pdfFile.name}`);
-        await uploadBytes(pdfRef, pdfFile);
-        pdfUrl = await getDownloadURL(pdfRef);
-        setUploadProgress("PDF carregado ✓");
-      } catch (e) {
-        console.warn("PDF não carregado:", e.message);
-        setUploadProgress("⚠️ PDF não carregado — Configure CORS no Storage");
-        await new Promise(r => setTimeout(r, 1500));
-      }
+      setUploadProgress("⚠️ PDF não suportado ainda — em breve!");
+      await new Promise(r => setTimeout(r, 1000));
     }
 
     // Guardar dados no Firestore (sempre acontece)
