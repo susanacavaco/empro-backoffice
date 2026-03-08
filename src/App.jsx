@@ -8,7 +8,8 @@ import {
   ArrowUp, ArrowDown
 } from "lucide-react";
 import { initializeApp } from "firebase/app";
-import { getFirestore, collection, onSnapshot, doc, updateDoc, query, orderBy } from "firebase/firestore";
+import { getFirestore, collection, onSnapshot, doc, updateDoc, addDoc, deleteDoc, query, orderBy, serverTimestamp } from "firebase/firestore";
+import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
 
 /* ── Firebase ── */
 const firebaseConfig = {
@@ -21,6 +22,7 @@ const firebaseConfig = {
 };
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
+const storage = getStorage(firebaseApp);
 
 /* ── Fonts ── */
 const fontLink = document.createElement("link");
@@ -416,21 +418,159 @@ function EcrãPromoções() {
 }
 
 /* ══════════════════════════════════
-   ECRÃ: PRODUTOS
+   ECRÃ: PRODUTOS (Firebase + Storage)
 ══════════════════════════════════ */
-const PRODUTOS_INIT = [
-  { id: 1, nome: "Sagres 33cl NR", ref: "SAG-33NR", familia: "Cerveja", preco: 17.28, stock: 240, ativo: true },
-  { id: 2, nome: "Super Bock 33cl", ref: "SB-33", familia: "Cerveja", preco: 16.32, stock: 192, ativo: true },
-  { id: 3, nome: "Heineken 33cl", ref: "HNK-33", familia: "Cerveja", preco: 21.60, stock: 96, ativo: true },
-  { id: 4, nome: "Red Bull 25cl", ref: "RB-25", familia: "Energéticas", preco: 34.80, stock: 48, ativo: true },
-  { id: 5, nome: "Coca-Cola 33cl", ref: "CC-33", familia: "Refrigerantes", preco: 13.92, stock: 120, ativo: true },
-  { id: 6, nome: "Água Monchique 1L", ref: "MON-1L", familia: "Água", preco: 4.20, stock: 36, ativo: false },
-];
+const FAMILIAS = ["Cerveja", "Refrigerantes", "Vinho", "Espumante", "Água", "Energéticas", "Destilados", "Outros"];
+
+const PRODUTO_VAZIO = { nome: "", ref: "", familia: "Cerveja", preco: "", precoUnit: "", unidade: "cx", stock: "", ativo: true, descricao: "", foto: "" };
+
+function ModalProduto({ produto, onClose, onSave }) {
+  const [form, setForm] = useState(produto || PRODUTO_VAZIO);
+  const [fotoFile, setFotoFile] = useState(null);
+  const [fotoPreview, setFotoPreview] = useState(produto?.foto || null);
+  const [saving, setSaving] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState("");
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const handleFoto = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setFotoFile(file);
+    setFotoPreview(URL.createObjectURL(file));
+  };
+
+  const handleSave = async () => {
+    if (!form.nome || !form.ref || !form.preco) return alert("Preencha Nome, Referência e Preço.");
+    setSaving(true);
+    try {
+      let fotoUrl = form.foto || "";
+      if (fotoFile) {
+        setUploadProgress("A carregar foto...");
+        const fileRef = storageRef(storage, `produtos/${Date.now()}_${fotoFile.name}`);
+        await uploadBytes(fileRef, fotoFile);
+        fotoUrl = await getDownloadURL(fileRef);
+        setUploadProgress("Foto carregada!");
+      }
+      const dados = {
+        nome: form.nome, ref: form.ref, familia: form.familia,
+        preco: parseFloat(form.preco) || 0,
+        precoUnit: parseFloat(form.precoUnit) || 0,
+        unidade: form.unidade || "cx",
+        stock: parseInt(form.stock) || 0,
+        ativo: form.ativo, descricao: form.descricao || "",
+        foto: fotoUrl,
+        updatedAt: serverTimestamp(),
+      };
+      if (produto?.firestoreId) {
+        await updateDoc(doc(db, "produtos", produto.firestoreId), dados);
+      } else {
+        await addDoc(collection(db, "produtos"), { ...dados, criadoEm: serverTimestamp() });
+      }
+      onSave();
+    } catch (e) {
+      console.error(e);
+      alert("Erro ao guardar: " + e.message);
+    } finally {
+      setSaving(false);
+      setUploadProgress("");
+    }
+  };
+
+  const inp = (label, key, type = "text", placeholder = "") => (
+    <div style={{ marginBottom: 14 }}>
+      <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 5, fontFamily: "monospace" }}>{label}</label>
+      <input type={type} value={form[key]} onChange={e => set(key, e.target.value)} placeholder={placeholder}
+        style={{ width: "100%", padding: "9px 12px", border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 13, fontFamily: S.font, color: T.text, outline: "none", boxSizing: "border-box" }} />
+    </div>
+  );
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#00000066", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ background: T.white, borderRadius: 16, padding: 28, width: 540, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 20px 60px #0003" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 22 }}>
+          <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: T.navy, fontFamily: S.display }}>{produto?.firestoreId ? "Editar Produto" : "Novo Produto"}</h2>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: T.muted }}><X size={20} /></button>
+        </div>
+
+        {/* Foto */}
+        <div style={{ marginBottom: 18 }}>
+          <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8, fontFamily: "monospace" }}>Foto do Produto</label>
+          <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
+            <div style={{ width: 90, height: 90, borderRadius: 12, border: `2px dashed ${T.border}`, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", background: T.bg, flexShrink: 0 }}>
+              {fotoPreview
+                ? <img src={fotoPreview} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                : <Package size={28} color={T.mutedL} />}
+            </div>
+            <div>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 7, background: T.navy, color: "white", padding: "9px 16px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: S.font }}>
+                <Download size={13} /> Escolher Foto
+                <input type="file" accept="image/*" onChange={handleFoto} style={{ display: "none" }} />
+              </label>
+              <div style={{ fontSize: 11, color: T.muted, marginTop: 6 }}>JPG, PNG ou WebP · Máx. 5MB</div>
+              {uploadProgress && <div style={{ fontSize: 11, color: T.green, marginTop: 4, fontWeight: 600 }}>{uploadProgress}</div>}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
+          <div style={{ gridColumn: "1 / -1" }}>{inp("Nome do Produto", "nome", "text", "Ex: Sagres 33cl NR")}</div>
+          {inp("Referência", "ref", "text", "Ex: SAG-33NR")}
+          <div style={{ marginBottom: 14 }}>
+            <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 5, fontFamily: "monospace" }}>Família</label>
+            <select value={form.familia} onChange={e => set("familia", e.target.value)}
+              style={{ width: "100%", padding: "9px 12px", border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 13, fontFamily: S.font, color: T.text, background: "white" }}>
+              {FAMILIAS.map(f => <option key={f}>{f}</option>)}
+            </select>
+          </div>
+          {inp("Preço cx/un (€)", "preco", "number", "0.00")}
+          {inp("Preço unitário (€)", "precoUnit", "number", "0.00")}
+          {inp("Unidade", "unidade", "text", "cx 24un")}
+          {inp("Stock", "stock", "number", "0")}
+          <div style={{ gridColumn: "1 / -1", marginBottom: 14 }}>
+            <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 5, fontFamily: "monospace" }}>Descrição (opcional)</label>
+            <textarea value={form.descricao} onChange={e => set("descricao", e.target.value)} rows={2} placeholder="Breve descrição do produto..."
+              style={{ width: "100%", padding: "9px 12px", border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 13, fontFamily: S.font, color: T.text, resize: "vertical", boxSizing: "border-box" }} />
+          </div>
+          <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+            <input type="checkbox" id="ativo" checked={form.ativo} onChange={e => set("ativo", e.target.checked)} style={{ width: 16, height: 16, cursor: "pointer" }} />
+            <label htmlFor="ativo" style={{ fontSize: 13, color: T.text, fontFamily: S.font, cursor: "pointer" }}>Produto ativo (visível na loja e app)</label>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+          <Btn variant="secondary" onClick={onClose}>Cancelar</Btn>
+          <Btn onClick={handleSave} disabled={saving}>{saving ? "A guardar..." : "Guardar Produto"}</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function EcrãProdutos() {
-  const [produtos] = useState(PRODUTOS_INIT);
+  const [produtos, setProdutos] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const filtered = produtos.filter(p => p.nome.toLowerCase().includes(search.toLowerCase()) || p.ref.toLowerCase().includes(search.toLowerCase()));
+  const [modal, setModal] = useState(null); // null | "novo" | produto
+
+  useEffect(() => {
+    const q = query(collection(db, "produtos"), orderBy("nome"));
+    const unsub = onSnapshot(q, snap => {
+      setProdutos(snap.docs.map(d => ({ firestoreId: d.id, ...d.data() })));
+      setLoading(false);
+    }, () => setLoading(false));
+    return unsub;
+  }, []);
+
+  const apagar = async (p) => {
+    if (!window.confirm(`Apagar "${p.nome}"?`)) return;
+    await deleteDoc(doc(db, "produtos", p.firestoreId));
+  };
+
+  const filtered = produtos.filter(p =>
+    p.nome?.toLowerCase().includes(search.toLowerCase()) ||
+    p.ref?.toLowerCase().includes(search.toLowerCase())
+  );
 
   return (
     <div>
@@ -444,32 +584,66 @@ function EcrãProdutos() {
             <Search size={13} color={T.muted} />
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Pesquisar..." style={{ border: "none", outline: "none", fontSize: 13, color: T.text, width: 160, background: "transparent", fontFamily: S.font }} />
           </div>
-          <Btn icon={Plus}>Novo Produto</Btn>
+          <Btn icon={Plus} onClick={() => setModal("novo")}>Novo Produto</Btn>
         </div>
       </div>
-      <div style={{ background: T.white, borderRadius: 16, border: `1px solid ${T.border}`, overflow: "hidden" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 100px 80px 80px 80px 100px", padding: "10px 20px", background: T.bg, borderBottom: `1px solid ${T.border}` }}>
-          {["Produto", "Família", "Preço", "Stock", "Estado", ""].map(h => (
-            <div key={h} style={{ fontSize: 10, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: 1, fontFamily: "monospace" }}>{h}</div>
+
+      {loading ? (
+        <div style={{ textAlign: "center", padding: 60, color: T.muted }}>A carregar produtos...</div>
+      ) : filtered.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 60, background: T.white, borderRadius: 16, border: `1px solid ${T.border}` }}>
+          <Package size={40} color={T.mutedL} style={{ marginBottom: 12 }} />
+          <div style={{ fontSize: 16, fontWeight: 700, color: T.navy, marginBottom: 6 }}>Sem produtos</div>
+          <div style={{ fontSize: 13, color: T.muted, marginBottom: 18 }}>Adicione o primeiro produto ao catálogo</div>
+          <Btn icon={Plus} onClick={() => setModal("novo")}>Adicionar Produto</Btn>
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 16 }}>
+          {filtered.map(p => (
+            <div key={p.firestoreId} style={{ background: T.white, borderRadius: 14, border: `1px solid ${T.border}`, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+              {/* Foto */}
+              <div style={{ height: 160, background: T.bg, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", position: "relative" }}>
+                {p.foto
+                  ? <img src={p.foto} alt={p.nome} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  : <Package size={48} color={T.mutedL} />}
+                <span style={{ position: "absolute", top: 10, right: 10, background: p.ativo ? T.green : T.muted, color: "white", fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 20, fontFamily: "monospace" }}>
+                  {p.ativo ? "ATIVO" : "INATIVO"}
+                </span>
+              </div>
+              {/* Info */}
+              <div style={{ padding: 14, flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: T.navy }}>{p.nome}</div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: 11, color: T.muted, fontFamily: "monospace" }}>{p.ref}</span>
+                  <Badge color={T.blue} small>{p.familia}</Badge>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6 }}>
+                  <div>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: T.red }}>€{fmt(p.preco)}</div>
+                    <div style={{ fontSize: 11, color: T.muted }}>{p.unidade || "cx"}</div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: p.stock < 50 ? T.red : T.green }}>{p.stock || 0} un</div>
+                    <div style={{ fontSize: 11, color: T.muted }}>stock</div>
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                  <Btn variant="secondary" size="sm" icon={Edit2} full onClick={() => setModal(p)}>Editar</Btn>
+                  <button onClick={() => apagar(p)} style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 8, padding: "7px 10px", cursor: "pointer", color: T.red, display: "flex", alignItems: "center" }}><Trash2 size={13} /></button>
+                </div>
+              </div>
+            </div>
           ))}
         </div>
-        {filtered.map((p, i) => (
-          <div key={p.id} style={{ display: "grid", gridTemplateColumns: "1fr 100px 80px 80px 80px 100px", padding: "13px 20px", borderBottom: i < filtered.length - 1 ? `1px solid ${T.border}` : "none", alignItems: "center" }}
-            onMouseEnter={e => e.currentTarget.style.background = T.bg + "88"}
-            onMouseLeave={e => e.currentTarget.style.background = "transparent"}
-          >
-            <div>
-              <div style={{ fontSize: 14, fontWeight: 700, color: T.navy }}>{p.nome}</div>
-              <div style={{ fontSize: 11, color: T.muted, fontFamily: "monospace" }}>{p.ref}</div>
-            </div>
-            <Badge color={T.blue} small>{p.familia}</Badge>
-            <div style={{ fontSize: 14, fontWeight: 700, color: T.navy }}>€{fmt(p.preco)}</div>
-            <div style={{ fontSize: 13, color: p.stock < 50 ? T.red : T.green, fontWeight: 600 }}>{p.stock} un</div>
-            <Badge color={p.ativo ? T.green : T.muted} small>{p.ativo ? "Ativo" : "Inativo"}</Badge>
-            <Btn variant="secondary" size="sm" icon={Edit2}>Editar</Btn>
-          </div>
-        ))}
-      </div>
+      )}
+
+      {modal && (
+        <ModalProduto
+          produto={modal === "novo" ? null : modal}
+          onClose={() => setModal(null)}
+          onSave={() => setModal(null)}
+        />
+      )}
     </div>
   );
 }
