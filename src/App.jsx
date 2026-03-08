@@ -420,6 +420,19 @@ function EcrãPromoções() {
 ══════════════════════════════════ */
 const FAMILIAS = ["Cerveja", "Refrigerantes", "Vinho", "Espumante", "Água", "Energéticas", "Destilados", "Outros"];
 
+// Converte número em formato PT (1.234,56 ou 1234,56 ou 1234.56) para float
+function parseNumPT(val) {
+  if (val === null || val === undefined || val === "") return 0;
+  if (typeof val === "number") return val;
+  const s = String(val).trim();
+  // Formato PT: 1.234,56 → remover pontos, trocar vírgula por ponto
+  if (s.includes(",") && s.includes(".")) return parseFloat(s.replace(/\./g, "").replace(",", ".")) || 0;
+  // Só vírgula: 17,28 → 17.28
+  if (s.includes(",")) return parseFloat(s.replace(",", ".")) || 0;
+  // Só ponto ou já EN: 17.28
+  return parseFloat(s) || 0;
+}
+
 const PRODUTO_VAZIO = { nome: "", ref: "", familia: "Cerveja", preco: "", precoUnit: "", unidade: "cx", stock: "", ativo: true, descricao: "", foto: "", pdf: "" };
 
 /* ── Modal Import Excel ── */
@@ -455,8 +468,8 @@ function ModalImportExcel({ onClose, onImport }) {
           nome: get("nome", "name", "produto", "artigo", "descri") || "",
           ref: get("ref", "cod", "sku", "código") || "",
           familia: get("famil", "categ", "tipo", "grupo") || "Outros",
-          preco: parseFloat(String(get("preco", "preço", "price", "pvf", "valor")).replace(",", ".")) || 0,
-          precoUnit: parseFloat(String(get("precounit", "unid", "unitário")).replace(",", ".")) || 0,
+          preco: parseNumPT(get("preco", "preço", "price", "pvf", "valor")),
+          precoUnit: parseNumPT(get("precounit", "unid", "unitário")),
           unidade: get("unidade", "unit", "embal") || "cx",
           stock: parseInt(get("stock", "existên", "qty", "quant")) || 0,
           descricao: get("desc", "obs", "nota") || "",
