@@ -5,7 +5,7 @@ import {
   Clock, AlertCircle, TrendingUp, Euro, ChevronDown,
   ChevronRight, X, Check, Filter, Download, RefreshCw,
   Tag, Truck, Eye, MapPin, Phone, Building2, Mail,
-  ArrowUp, ArrowDown
+  ArrowUp, ArrowDown, Upload, FileText, FileSpreadsheet
 } from "lucide-react";
 import { initializeApp } from "firebase/app";
 import { getFirestore, collection, onSnapshot, doc, updateDoc, addDoc, deleteDoc, query, orderBy, serverTimestamp } from "firebase/firestore";
@@ -422,11 +422,141 @@ function EcrãPromoções() {
 ══════════════════════════════════ */
 const FAMILIAS = ["Cerveja", "Refrigerantes", "Vinho", "Espumante", "Água", "Energéticas", "Destilados", "Outros"];
 
-const PRODUTO_VAZIO = { nome: "", ref: "", familia: "Cerveja", preco: "", precoUnit: "", unidade: "cx", stock: "", ativo: true, descricao: "", foto: "" };
+const PRODUTO_VAZIO = { nome: "", ref: "", familia: "Cerveja", preco: "", precoUnit: "", unidade: "cx", stock: "", ativo: true, descricao: "", foto: "", pdf: "" };
+
+/* ── Modal Import Excel ── */
+function ModalImportExcel({ onClose, onImport }) {
+  const [ficheiro, setFicheiro] = useState(null);
+  const [preview, setPreview] = useState([]);
+  const [importing, setImporting] = useState(false);
+  const [erro, setErro] = useState("");
+
+  const handleFicheiro = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setFicheiro(file);
+    setErro("");
+    try {
+      const XLSX = await import("https://cdn.sheetjs.com/xlsx-0.20.0/package/xlsx.mjs");
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
+      // Mapear colunas flexivelmente
+      const mapped = rows.map((r, i) => {
+        const keys = Object.keys(r).map(k => k.toLowerCase().trim());
+        const get = (...names) => {
+          for (const n of names) {
+            const k = Object.keys(r).find(k => k.toLowerCase().trim().includes(n));
+            if (k && r[k] !== "") return r[k];
+          }
+          return "";
+        };
+        return {
+          _row: i + 2,
+          nome: get("nome", "name", "produto", "artigo", "descri") || "",
+          ref: get("ref", "cod", "sku", "código") || "",
+          familia: get("famil", "categ", "tipo", "grupo") || "Outros",
+          preco: parseFloat(String(get("preco", "preço", "price", "pvf", "valor")).replace(",", ".")) || 0,
+          precoUnit: parseFloat(String(get("precounit", "unid", "unitário")).replace(",", ".")) || 0,
+          unidade: get("unidade", "unit", "embal") || "cx",
+          stock: parseInt(get("stock", "existên", "qty", "quant")) || 0,
+          descricao: get("desc", "obs", "nota") || "",
+          ativo: true, foto: "", pdf: "",
+        };
+      }).filter(r => r.nome);
+      setPreview(mapped);
+    } catch (e) {
+      setErro("Erro ao ler o ficheiro. Certifique-se que é um .xlsx ou .csv válido.");
+      console.error(e);
+    }
+  };
+
+  const handleImport = async () => {
+    if (!preview.length) return;
+    setImporting(true);
+    try {
+      for (const p of preview) {
+        await addDoc(collection(db, "produtos"), { ...p, criadoEm: serverTimestamp(), updatedAt: serverTimestamp() });
+      }
+      onImport(preview.length);
+    } catch (e) {
+      setErro("Erro ao importar: " + e.message);
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#00000066", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ background: T.white, borderRadius: 16, padding: 28, width: 680, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 20px 60px #0003" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: T.navy, fontFamily: S.display }}>Importar via Excel</h2>
+            <p style={{ margin: "4px 0 0", fontSize: 13, color: T.muted }}>Carregue um ficheiro .xlsx ou .csv com os seus produtos</p>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: T.muted }}><X size={20} /></button>
+        </div>
+
+        {/* Colunas esperadas */}
+        <div style={{ background: T.bg, borderRadius: 10, padding: "12px 16px", marginBottom: 18, fontSize: 12, color: T.muted, lineHeight: 1.8 }}>
+          <strong style={{ color: T.navy }}>Colunas reconhecidas:</strong>{" "}
+          <code>Nome</code>, <code>Ref</code>, <code>Família</code>, <code>Preço</code>, <code>PreçoUnit</code>, <code>Unidade</code>, <code>Stock</code>, <code>Descrição</code>
+          <br />Os cabeçalhos não precisam de ser exactos — o sistema tenta reconhecê-los automaticamente.
+        </div>
+
+        {/* Upload */}
+        <label style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", border: `2px dashed ${T.border}`, borderRadius: 12, padding: "28px 20px", cursor: "pointer", background: ficheiro ? T.green + "08" : T.bg, marginBottom: 16, transition: "all .2s" }}>
+          <FileSpreadsheet size={36} color={ficheiro ? T.green : T.mutedL} style={{ marginBottom: 10 }} />
+          <div style={{ fontSize: 14, fontWeight: 700, color: ficheiro ? T.green : T.navy }}>{ficheiro ? ficheiro.name : "Clique para escolher ficheiro"}</div>
+          <div style={{ fontSize: 12, color: T.muted, marginTop: 4 }}>.xlsx, .xls ou .csv</div>
+          <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFicheiro} style={{ display: "none" }} />
+        </label>
+
+        {erro && <div style={{ background: T.red + "11", color: T.red, borderRadius: 8, padding: "10px 14px", fontSize: 13, marginBottom: 14 }}>{erro}</div>}
+
+        {/* Preview */}
+        {preview.length > 0 && (
+          <div style={{ marginBottom: 18 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: T.navy, marginBottom: 10 }}>
+              {preview.length} produto(s) encontrado(s) — pré-visualização:
+            </div>
+            <div style={{ border: `1px solid ${T.border}`, borderRadius: 10, overflow: "hidden", maxHeight: 260, overflowY: "auto" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 80px 80px", padding: "8px 14px", background: T.bg, borderBottom: `1px solid ${T.border}` }}>
+                {["Nome", "Ref", "Família", "Preço", "Stock"].map(h => (
+                  <div key={h} style={{ fontSize: 10, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: 1, fontFamily: "monospace" }}>{h}</div>
+                ))}
+              </div>
+              {preview.map((p, i) => (
+                <div key={i} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 80px 80px", padding: "9px 14px", borderBottom: i < preview.length - 1 ? `1px solid ${T.border}` : "none", alignItems: "center" }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: T.navy }}>{p.nome}</div>
+                  <div style={{ fontSize: 11, color: T.muted, fontFamily: "monospace" }}>{p.ref || "—"}</div>
+                  <div style={{ fontSize: 12, color: T.blue }}>{p.familia}</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: T.navy }}>€{p.preco.toFixed(2)}</div>
+                  <div style={{ fontSize: 13, color: T.green }}>{p.stock}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+          <Btn variant="secondary" onClick={onClose}>Cancelar</Btn>
+          {preview.length > 0 && (
+            <Btn variant="green" icon={Upload} onClick={handleImport} disabled={importing}>
+              {importing ? "A importar..." : `Importar ${preview.length} produto(s)`}
+            </Btn>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function ModalProduto({ produto, onClose, onSave }) {
   const [form, setForm] = useState(produto || PRODUTO_VAZIO);
   const [fotoFile, setFotoFile] = useState(null);
+  const [pdfFile, setPdfFile] = useState(null);
   const [fotoPreview, setFotoPreview] = useState(produto?.foto || null);
   const [saving, setSaving] = useState(false);
   const [uploadProgress, setUploadProgress] = useState("");
@@ -445,13 +575,20 @@ function ModalProduto({ produto, onClose, onSave }) {
     setSaving(true);
     try {
       let fotoUrl = form.foto || "";
+      let pdfUrl = form.pdf || "";
       if (fotoFile) {
         setUploadProgress("A carregar foto...");
         const fileRef = storageRef(storage, `produtos/${Date.now()}_${fotoFile.name}`);
         await uploadBytes(fileRef, fotoFile);
         fotoUrl = await getDownloadURL(fileRef);
-        setUploadProgress("Foto carregada!");
       }
+      if (pdfFile) {
+        setUploadProgress("A carregar PDF...");
+        const pdfRef = storageRef(storage, `fichas/${Date.now()}_${pdfFile.name}`);
+        await uploadBytes(pdfRef, pdfFile);
+        pdfUrl = await getDownloadURL(pdfRef);
+      }
+      if (fotoFile || pdfFile) setUploadProgress("Ficheiros carregados!");
       const dados = {
         nome: form.nome, ref: form.ref, familia: form.familia,
         preco: parseFloat(form.preco) || 0,
@@ -460,6 +597,7 @@ function ModalProduto({ produto, onClose, onSave }) {
         stock: parseInt(form.stock) || 0,
         ativo: form.ativo, descricao: form.descricao || "",
         foto: fotoUrl,
+        pdf: pdfUrl,
         updatedAt: serverTimestamp(),
       };
       if (produto?.firestoreId) {
@@ -513,6 +651,27 @@ function ModalProduto({ produto, onClose, onSave }) {
           </div>
         </div>
 
+        {/* PDF */}
+        <div style={{ marginBottom: 18 }}>
+          <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8, fontFamily: "monospace" }}>Ficha Técnica (PDF)</label>
+          <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
+            <div style={{ width: 90, height: 90, borderRadius: 12, border: `2px dashed ${T.border}`, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: T.bg, flexShrink: 0, gap: 4 }}>
+              <FileText size={24} color={pdfFile || form.pdf ? T.red : T.mutedL} />
+              <span style={{ fontSize: 9, color: T.muted, fontFamily: "monospace" }}>PDF</span>
+            </div>
+            <div>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 7, background: T.navy, color: "white", padding: "9px 16px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: S.font }}>
+                <Upload size={13} /> {pdfFile ? pdfFile.name : "Escolher PDF"}
+                <input type="file" accept=".pdf" onChange={e => setPdfFile(e.target.files[0])} style={{ display: "none" }} />
+              </label>
+              {form.pdf && !pdfFile && (
+                <a href={form.pdf} target="_blank" rel="noreferrer" style={{ display: "block", fontSize: 11, color: T.blue, marginTop: 6, textDecoration: "underline" }}>Ver PDF atual</a>
+              )}
+              <div style={{ fontSize: 11, color: T.muted, marginTop: 6 }}>Ficha técnica visível na loja e app · Máx. 10MB</div>
+            </div>
+          </div>
+        </div>
+
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
           <div style={{ gridColumn: "1 / -1" }}>{inp("Nome do Produto", "nome", "text", "Ex: Sagres 33cl NR")}</div>
           {inp("Referência", "ref", "text", "Ex: SAG-33NR")}
@@ -551,7 +710,8 @@ function EcrãProdutos() {
   const [produtos, setProdutos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [modal, setModal] = useState(null); // null | "novo" | produto
+  const [modal, setModal] = useState(null);
+  const [modalExcel, setModalExcel] = useState(false); // null | "novo" | produto
 
   useEffect(() => {
     const q = query(collection(db, "produtos"), orderBy("nome"));
@@ -584,6 +744,7 @@ function EcrãProdutos() {
             <Search size={13} color={T.muted} />
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Pesquisar..." style={{ border: "none", outline: "none", fontSize: 13, color: T.text, width: 160, background: "transparent", fontFamily: S.font }} />
           </div>
+          <Btn variant="secondary" icon={FileSpreadsheet} onClick={() => setModalExcel(true)}>Importar Excel</Btn>
           <Btn icon={Plus} onClick={() => setModal("novo")}>Novo Produto</Btn>
         </div>
       </div>
@@ -629,6 +790,11 @@ function EcrãProdutos() {
                 </div>
                 <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
                   <Btn variant="secondary" size="sm" icon={Edit2} full onClick={() => setModal(p)}>Editar</Btn>
+                  {p.pdf && (
+                    <a href={p.pdf} target="_blank" rel="noreferrer" style={{ display: "flex", alignItems: "center", border: `1px solid ${T.border}`, borderRadius: 8, padding: "7px 10px", color: T.red, textDecoration: "none" }} title="Ver ficha técnica PDF">
+                      <FileText size={13} />
+                    </a>
+                  )}
                   <button onClick={() => apagar(p)} style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 8, padding: "7px 10px", cursor: "pointer", color: T.red, display: "flex", alignItems: "center" }}><Trash2 size={13} /></button>
                 </div>
               </div>
@@ -642,6 +808,12 @@ function EcrãProdutos() {
           produto={modal === "novo" ? null : modal}
           onClose={() => setModal(null)}
           onSave={() => setModal(null)}
+        />
+      )}
+      {modalExcel && (
+        <ModalImportExcel
+          onClose={() => setModalExcel(false)}
+          onImport={(n) => { setModalExcel(false); alert(`✅ ${n} produto(s) importado(s) com sucesso!`); }}
         />
       )}
     </div>
