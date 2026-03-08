@@ -484,7 +484,13 @@ function ModalImportExcel({ onClose, onImport }) {
           descricao: get("desc", "obs", "nota") || "",
           ativo: true, foto: "", pdf: "",
         };
-      }).filter(r => r.nome);
+      }).filter(r => {
+        // Ignorar linhas vazias ou linhas de descrição (nome muito longo ou contém "Ex:")
+        if (!r.nome) return false;
+        if (String(r.nome).includes("Ex:") || String(r.nome).length > 80) return false;
+        if (r.preco === 0 && r.stock === 0 && !r.ref) return false;
+        return true;
+      });
       setPreview(mapped);
     } catch (e) {
       setErro("Erro ao ler o ficheiro. Certifique-se que é um .xlsx ou .csv válido.");
