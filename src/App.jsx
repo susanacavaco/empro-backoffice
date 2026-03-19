@@ -34,8 +34,8 @@ const authReadyPromise = new Promise(resolve => {
 
 // Hook para usar nos componentes — espera auth antes de activar listeners
 function useAuthReady() {
-  const [ready, setReady] = React.useState(authReady);
-  React.useEffect(() => {
+  const [ready, setReady] = useState(authReady);
+  useEffect(() => {
     if (!authReady) authReadyPromise.then(() => setReady(true));
   }, []);
   return ready;
