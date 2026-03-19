@@ -4,12 +4,12 @@ import {
   LogOut, Bell, Search, Plus, Edit2, Trash2, CheckCircle,
   Clock, AlertCircle, TrendingUp, Euro, ChevronDown,
   ChevronRight, X, Check, Filter, Download, RefreshCw,
-  Tag, Truck, Eye, MapPin, Phone, Building2, Mail,
+  Tag, Truck, Eye, EyeOff, MapPin, Phone, Building2, Mail,
   ArrowUp, ArrowDown, Upload, FileText, FileSpreadsheet
 } from "lucide-react";
 import { initializeApp } from "firebase/app";
 import { getFirestore, collection, onSnapshot, doc, updateDoc, addDoc, deleteDoc, query, orderBy, serverTimestamp } from "firebase/firestore";
-import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
+import { getAuth, signInAnonymously, onAuthStateChanged, sendPasswordResetEmail } from "firebase/auth";
 
 /* ── Firebase ── */
 const firebaseConfig = {
@@ -23,8 +23,23 @@ const firebaseConfig = {
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
 const auth = getAuth(firebaseApp);
-// Autenticação anónima — necessária para as regras do Firestore
-signInAnonymously(auth).catch(e => console.warn("Auth anónima falhou:", e.message));
+
+// Aguarda autenticação anónima antes de qualquer operação Firestore
+let authReady = false;
+const authReadyPromise = new Promise(resolve => {
+  signInAnonymously(auth)
+    .then(() => { authReady = true; resolve(); })
+    .catch(e => { console.warn("Auth anónima falhou:", e.message); resolve(); });
+});
+
+// Hook para usar nos componentes — espera auth antes de activar listeners
+function useAuthReady() {
+  const [ready, setReady] = React.useState(authReady);
+  React.useEffect(() => {
+    if (!authReady) authReadyPromise.then(() => setReady(true));
+  }, []);
+  return ready;
+}
 
 /* ── Fonts ── */
 const fontLink = document.createElement("link");
@@ -100,8 +115,10 @@ function EcrãEncomendas() {
   const [filtro, setFiltro] = useState("todas");
   const [search, setSearch] = useState("");
   const [atualizando, setAtualizando] = useState(null);
+  const authReady = useAuthReady();
 
   useEffect(() => {
+    if (!authReady) return;
     const q = query(collection(db, "encomendas"), orderBy("criadoEm", "desc"));
     const unsub = onSnapshot(q, (snap) => {
       const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -424,7 +441,25 @@ function EcrãPromoções() {
 ══════════════════════════════════ */
 const FAMILIAS = ["Cerveja", "Refrigerantes", "Vinho", "Espumante", "Água", "Energéticas", "Destilados", "Outros"];
 
-// Abre PDF Base64 ou URL numa nova janela via Blob
+// Cria utilizador Firebase Auth via REST API (não interfere com a sessão anónima)
+async function criarUtilizadorFirebase(email, password) {
+  const API_KEY = firebaseConfig.apiKey;
+  const resp = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${API_KEY}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password, returnSecureToken: true })
+  });
+  const data = await resp.json();
+  if (data.error) throw new Error(data.error.message);
+  return data.localId; // uid do novo utilizador
+}
+
+// Desactiva conta via REST API
+async function desactivarUtilizador(uid) {
+  // Marca como inactivo no Firestore — sem Admin SDK não podemos desactivar no Auth directamente
+  await updateDoc(doc(db, "clientes", uid), { ativo: false });
+}
+
 function openPdf(pdfData) {
   if (!pdfData) return;
   try {
@@ -886,16 +921,18 @@ function EcrãProdutos() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState(null);
-  const [modalExcel, setModalExcel] = useState(false); // null | "novo" | produto
+  const [modalExcel, setModalExcel] = useState(false);
+  const authReady = useAuthReady();
 
   useEffect(() => {
+    if (!authReady) return;
     const q = query(collection(db, "produtos"), orderBy("nome"));
     const unsub = onSnapshot(q, snap => {
       setProdutos(snap.docs.map(d => ({ firestoreId: d.id, ...d.data() })));
       setLoading(false);
     }, () => setLoading(false));
     return unsub;
-  }, []);
+  }, [authReady]);
 
   const apagar = async (p) => {
     if (!window.confirm(`Apagar "${p.nome}"?`)) return;
@@ -1006,48 +1043,188 @@ const CLIENTES = [
   { id: 4, nome: "Tasca do Zé", nif: "504567890", local: "Loulé", tipo: "C", comercial: "João Ferreira", saldo: 1200.00, limite: 2000, ativo: false },
 ];
 
+function ModalNovoCliente({ onClose, onSave }) {
+  const [form, setForm] = useState({ nome: "", email: "", password: "", nif: "", tipo: "A", desconto: "5", comercial: "", local: "" });
+  const [saving, setSaving] = useState(false);
+  const [erro, setErro] = useState("");
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const handleSave = async () => {
+    if (!form.nome || !form.email || !form.password) return setErro("Nome, email e password são obrigatórios.");
+    if (form.password.length < 6) return setErro("Password deve ter pelo menos 6 caracteres.");
+    setSaving(true); setErro("");
+    try {
+      const uid = await criarUtilizadorFirebase(form.email, form.password);
+      await addDoc(collection(db, "clientes"), {
+        uid,
+        nome: form.nome,
+        email: form.email,
+        nif: form.nif,
+        tipo: form.tipo,
+        desconto: parseFloat(form.desconto) || 0,
+        comercial: form.comercial,
+        local: form.local,
+        ativo: true,
+        saldo: 0,
+        limite: 5000,
+        criadoEm: serverTimestamp(),
+      });
+      onSave();
+    } catch (e) {
+      const msgs = { "EMAIL_EXISTS": "Este email já tem conta.", "WEAK_PASSWORD": "Password demasiado fraca.", "INVALID_EMAIL": "Email inválido." };
+      setErro(msgs[e.message] || "Erro: " + e.message);
+    } finally { setSaving(false); }
+  };
+
+  const inp = (label, key, type = "text", placeholder = "") => (
+    <div style={{ marginBottom: 14 }}>
+      <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6, fontFamily: "monospace" }}>{label}</label>
+      <input type={type} value={form[key]} onChange={e => set(key, e.target.value)} placeholder={placeholder}
+        style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1px solid ${T.border}`, fontSize: 14, fontFamily: S.font, boxSizing: "border-box", color: T.navy, background: T.white }} />
+    </div>
+  );
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#0006", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
+      <div style={{ background: T.white, borderRadius: 16, padding: 28, width: 500, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 20px 60px #0003" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 22 }}>
+          <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: T.navy, fontFamily: S.display }}>Novo Cliente</h2>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: T.muted }}><X size={20} /></button>
+        </div>
+
+        <div style={{ background: T.bg, borderRadius: 10, padding: "10px 14px", marginBottom: 18, fontSize: 12, color: T.muted }}>
+          📧 O cliente receberá as credenciais por email. A password pode ser alterada depois.
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
+          <div style={{ gridColumn: "1 / -1" }}>{inp("Nome da Empresa", "nome", "text", "Ex: Restaurante Marina")}</div>
+          {inp("Email de Acesso", "email", "email", "cliente@empresa.pt")}
+          {inp("Password Temporária", "password", "password", "Mín. 6 caracteres")}
+          {inp("NIF", "nif", "text", "Ex: 501234567")}
+          {inp("Localidade", "local", "text", "Ex: Albufeira")}
+          <div style={{ marginBottom: 14 }}>
+            <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6, fontFamily: "monospace" }}>Tipo</label>
+            <select value={form.tipo} onChange={e => set("tipo", e.target.value)}
+              style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1px solid ${T.border}`, fontSize: 14, fontFamily: S.font, color: T.navy, background: T.white }}>
+              {["A","B","C"].map(t => <option key={t} value={t}>Tipo {t}</option>)}
+            </select>
+          </div>
+          {inp("Desconto Base (%)", "desconto", "number", "Ex: 5")}
+          <div style={{ gridColumn: "1 / -1" }}>{inp("Comercial Responsável", "comercial", "text", "Ex: João Ferreira")}</div>
+        </div>
+
+        {erro && <div style={{ background: `${T.red}15`, border: `1px solid ${T.red}44`, borderRadius: 8, padding: "10px 14px", color: T.red, fontSize: 13, marginBottom: 14 }}>{erro}</div>}
+
+        <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
+          <Btn variant="secondary" onClick={onClose} full>Cancelar</Btn>
+          <Btn onClick={handleSave} disabled={saving} full icon={saving ? null : Plus}>
+            {saving ? "A criar conta..." : "Criar Conta de Acesso"}
+          </Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function EcrãClientes() {
+  const [clientes, setClientes] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [modal, setModal] = useState(false);
+  const [search, setSearch] = useState("");
+  const [resetEmail, setResetEmail] = useState("");
+  const authReady = useAuthReady();
+
+  useEffect(() => {
+    if (!authReady) return;
+    const unsub = onSnapshot(collection(db, "clientes"), snap => {
+      setClientes(snap.docs.map(d => ({ firestoreId: d.id, ...d.data() })));
+      setLoading(false);
+    }, () => setLoading(false));
+    return unsub;
+  }, [authReady]);
+
+  const toggleAtivo = async (c) => {
+    await updateDoc(doc(db, "clientes", c.firestoreId), { ativo: !c.ativo });
+  };
+
+  const enviarReset = async (email) => {
+    try {
+      await sendPasswordResetEmail(auth, email);
+      setResetEmail(email);
+      setTimeout(() => setResetEmail(""), 4000);
+    } catch (e) { alert("Erro: " + e.message); }
+  };
+
+  const filtered = clientes.filter(c =>
+    c.nome?.toLowerCase().includes(search.toLowerCase()) ||
+    c.email?.toLowerCase().includes(search.toLowerCase()) ||
+    c.nif?.includes(search)
+  );
+
   return (
     <div>
+      {modal && <ModalNovoCliente onClose={() => setModal(false)} onSave={() => setModal(false)} />}
+
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
         <div>
           <div style={{ fontSize: 11, color: T.muted, letterSpacing: 2, textTransform: "uppercase", fontFamily: "monospace", marginBottom: 4 }}>Carteira</div>
           <h1 style={{ margin: 0, fontSize: 28, fontWeight: 700, color: T.navy, fontFamily: S.display }}>Clientes</h1>
         </div>
-        <Btn icon={Plus}>Novo Cliente</Btn>
+        <div style={{ display: "flex", gap: 10 }}>
+          <div style={{ position: "relative" }}>
+            <Search size={14} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: T.muted }} />
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Pesquisar..."
+              style={{ paddingLeft: 34, paddingRight: 12, paddingTop: 9, paddingBottom: 9, borderRadius: 8, border: `1px solid ${T.border}`, fontSize: 13, fontFamily: S.font, width: 220, color: T.navy }} />
+          </div>
+          <Btn icon={Plus} onClick={() => setModal(true)}>Novo Cliente</Btn>
+        </div>
       </div>
-      <div style={{ background: T.white, borderRadius: 16, border: `1px solid ${T.border}`, overflow: "hidden" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 120px 110px 100px 80px 60px", padding: "10px 20px", background: T.bg, borderBottom: `1px solid ${T.border}` }}>
-          {["Cliente", "Tipo", "Comercial", "Saldo", "Limite", "Estado", ""].map(h => (
-            <div key={h} style={{ fontSize: 10, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: 1, fontFamily: "monospace" }}>{h}</div>
+
+      {resetEmail && (
+        <div style={{ background: `${T.green}15`, border: `1px solid ${T.green}44`, borderRadius: 10, padding: "10px 16px", color: T.green, fontSize: 13, marginBottom: 16, fontWeight: 600 }}>
+          ✅ Email de reset enviado para {resetEmail}
+        </div>
+      )}
+
+      {loading ? (
+        <div style={{ textAlign: "center", padding: 60, color: T.muted }}>A carregar clientes...</div>
+      ) : filtered.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 60, color: T.muted }}>
+          <Users size={48} color={T.border} style={{ margin: "0 auto 12px" }} />
+          <div>{search ? "Nenhum cliente encontrado." : "Ainda não há clientes. Crie o primeiro!"}</div>
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {filtered.map(c => (
+            <div key={c.firestoreId} style={{ background: T.white, borderRadius: 14, border: `1px solid ${T.border}`, padding: "16px 20px", display: "flex", alignItems: "center", gap: 16, opacity: c.ativo ? 1 : 0.6 }}>
+              <div style={{ width: 44, height: 44, borderRadius: 12, background: `${T.navy}15`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                <span style={{ fontSize: 18, fontWeight: 700, color: T.navy }}>{(c.nome || "?")[0]}</span>
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: T.navy }}>{c.nome}</div>
+                <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>{c.email} · NIF {c.nif} · {c.local}</div>
+              </div>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: T.navy }}>{c.desconto || 0}%</div>
+                <div style={{ fontSize: 10, color: T.muted }}>desconto</div>
+              </div>
+              <Badge color={T.orange} small>Tipo {c.tipo || "A"}</Badge>
+              <div style={{ fontSize: 12, color: T.muted, minWidth: 90 }}>{c.comercial}</div>
+              <Badge color={c.ativo ? T.green : T.muted} small>{c.ativo ? "Ativo" : "Inativo"}</Badge>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={() => enviarReset(c.email)} title="Enviar reset de password"
+                  style={{ padding: "6px 10px", borderRadius: 8, border: `1px solid ${T.border}`, background: "white", cursor: "pointer", fontSize: 11, color: T.muted, display: "flex", alignItems: "center", gap: 4 }}>
+                  <Mail size={12} /> Reset
+                </button>
+                <button onClick={() => toggleAtivo(c)}
+                  style={{ padding: "6px 10px", borderRadius: 8, border: `1px solid ${T.border}`, background: "white", cursor: "pointer", fontSize: 11, color: c.ativo ? T.red : T.green, display: "flex", alignItems: "center", gap: 4 }}>
+                  {c.ativo ? <><EyeOff size={12} /> Desativar</> : <><Eye size={12} /> Ativar</>}
+                </button>
+              </div>
+            </div>
           ))}
         </div>
-        {CLIENTES.map((c, i) => {
-          const pct = Math.round(c.saldo / c.limite * 100);
-          return (
-            <div key={c.id} style={{ display: "grid", gridTemplateColumns: "1fr 80px 120px 110px 100px 80px 60px", padding: "14px 20px", borderBottom: i < CLIENTES.length - 1 ? `1px solid ${T.border}` : "none", alignItems: "center" }}
-              onMouseEnter={e => e.currentTarget.style.background = T.bg + "88"}
-              onMouseLeave={e => e.currentTarget.style.background = "transparent"}
-            >
-              <div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: T.navy }}>{c.nome}</div>
-                <div style={{ fontSize: 11, color: T.muted }}>{c.local} · NIF {c.nif}</div>
-              </div>
-              <Badge color={T.orange} small>Tipo {c.tipo}</Badge>
-              <div style={{ fontSize: 12, color: T.muted }}>{c.comercial}</div>
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: c.saldo > 0 ? T.red : T.green }}>€{fmt(c.saldo)}</div>
-                <div style={{ height: 3, background: T.bg, borderRadius: 2, marginTop: 3, width: 60 }}>
-                  <div style={{ width: `${pct}%`, height: "100%", background: pct > 70 ? T.red : T.green, borderRadius: 2 }} />
-                </div>
-              </div>
-              <div style={{ fontSize: 13, color: T.muted }}>€{fmt(c.limite)}</div>
-              <Badge color={c.ativo ? T.green : T.muted} small>{c.ativo ? "Ativo" : "Inativo"}</Badge>
-              <Btn variant="secondary" size="sm" icon={Eye}>Ver</Btn>
-            </div>
-          );
-        })}
-      </div>
+      )}
     </div>
   );
 }
@@ -1103,8 +1280,10 @@ function EcrãRelatorios() {
 export default function BackOffice() {
   const [page, setPage] = useState("encomendas");
   const [encPendentes, setEncPendentes] = useState(0);
+  const authReady = useAuthReady();
 
   useEffect(() => {
+    if (!authReady) return;
     const unsub = onSnapshot(collection(db, "encomendas"), (snap) => {
       setEncPendentes(snap.docs.filter(d => d.data().estado === "pendente").length);
     });
