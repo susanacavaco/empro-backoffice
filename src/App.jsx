@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { initializeApp } from "firebase/app";
 import { getFirestore, collection, onSnapshot, doc, updateDoc, addDoc, deleteDoc, query, orderBy, serverTimestamp } from "firebase/firestore";
+import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 /* ── Firebase ── */
 const firebaseConfig = {
@@ -21,6 +22,9 @@ const firebaseConfig = {
 };
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
+const auth = getAuth(firebaseApp);
+// Autenticação anónima — necessária para as regras do Firestore
+signInAnonymously(auth).catch(e => console.warn("Auth anónima falhou:", e.message));
 
 /* ── Fonts ── */
 const fontLink = document.createElement("link");
